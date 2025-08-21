@@ -1,9 +1,43 @@
+from voice_commands import listen_for_commands
+import pyttsx3
+from conversational_ai import gemini_conversation
+def speak_response(message):
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 170)
+    engine.say(message)
+    engine.runAndWait()
+
+def speak_response(message):
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 170)
+    engine.say(message)
+    engine.runAndWait()
+
+def main():
+    api_key = "AIzaSyC1yvPtTKHY3EQ23XCB06lZQEEPdR51euE"
+    while True:
+        user_input = listen_for_commands()
+        if user_input.strip().lower() in ["exit", "quit"]:
+            speak_response("Goodbye.")
+            break
+        # Send all user input to Gemini for conversational response
+        ai_response = gemini_conversation(user_input, api_key=api_key)
+        print("Gemini:", ai_response)
+        speak_response(ai_response)
+
 import torch
 import cv2
 import numpy as np
 from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 from image_capture import image_capture
 import warnings
+import pyttsx3
+def speak_alert(message):
+    """Use TTS to speak an alert message aloud."""
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 170)  # Set speech rate
+    engine.say(message)
+    engine.runAndWait()
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -65,8 +99,9 @@ def estimate_depth_cpu(image_path="captured.jpg"):
     close_zone = depth_map < (depth_map.mean() * 0.6)
     if close_zone.any():
         print("⚠️ Obstacle detected nearby!")
+        speak_alert("Warning! Obstacle detected ahead.")
     else:
         print("✅ No close obstacle detected.")
 
 if __name__ == "__main__":
-    estimate_depth_cpu()
+    main()
