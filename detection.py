@@ -8,7 +8,7 @@ Adjustments:
 import time, cv2, torch, numpy as np
 from models import yolo_model, midas, transform, device
 from state import (
-    latest_frame, frame_lock, latest_objects, context_lock, obstacle_detected,
+    latest_frame, frame_lock, latest_objects, latest_boxes, context_lock, obstacle_detected,
     obstacle_warning_state, detection_active
 )
 from tts import speak
@@ -32,17 +32,32 @@ def detection_thread():
             results = yolo_model(frame)
             names = yolo_model.names
             detected = set()
+            boxes_list = []
+            h_frame, w_frame = frame.shape[:2]
             for r in results:
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
                     label = names[cls_id]
                     detected.add(label)
+                    # box.xyxy format: tensor of shape (4,)
+                    xyxy = box.xyxy[0].cpu().numpy() if hasattr(box, 'xyxy') else None
+                    if xyxy is not None:
+                        x1, y1, x2, y2 = xyxy
+                        area = max(0.0, (x2 - x1) * (y2 - y1))
+                        boxes_list.append({
+                            'label': label,
+                            'xyxy': (float(x1), float(y1), float(x2), float(y2)),
+                            'area': float(area),
+                            'rel_area': float(area) / (w_frame * h_frame)
+                        })
             with context_lock:
-                # IMPORTANT: mutate the shared set in-place so other modules
+                # IMPORTANT: mutate the shared set/list in-place so other modules
                 # holding a reference (imported from state) see updates.
                 latest_objects.clear()
                 latest_objects.update(detected)
-            print(f"[DETECTION] Objects: {detected}")
+                latest_boxes.clear()
+                latest_boxes.extend(boxes_list)
+            print(f"[DETECTION] Objects: {detected} boxes={len(boxes_list)}")
         if frame_count % 3 == 0:
             # Depth estimation
             img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -74,8 +89,28 @@ def detection_thread():
             # Decide obstacle if enough of central region is close
             obstacle_now = near_ratio > 0.08  # 8% of pixels close
 
+            # Also consider large bounding boxes in central region as obstacle
+            large_central_box = False
+            try:
+                cx_min, cy_min = x0, y0
+                cx_max, cy_max = x0 + cw, y0 + ch
+                for b in latest_boxes:
+                    x1, y1, x2, y2 = b['xyxy']
+                    # box centroid
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    # relative area threshold for "large" object
+                    if b.get('rel_area', 0.0) >= 0.05 and (cx_min <= cx <= cx_max) and (cy_min <= cy <= cy_max):
+                        large_central_box = True
+                        break
+            except Exception:
+                large_central_box = False
+
+            # combine signals: require either a sizeable central object OR a near_ratio
+            obstacle_now = obstacle_now or large_central_box
+
             with context_lock:
-                obstacle_detected = obstacle_now
+                obstacle_detected[0] = bool(obstacle_now)
 
             if obstacle_now:
                 if not obstacle_warning_state['active']:

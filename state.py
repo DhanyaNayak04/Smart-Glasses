@@ -19,7 +19,11 @@ latest_frame = [None]  # mutable container for latest frame
 frame_lock = threading.Lock()
 
 latest_objects = set()
-obstacle_detected = False
+# Store latest detected bounding boxes as list of dicts: {'label': str, 'xyxy': (x1,y1,x2,y2), 'area': float}
+latest_boxes = []
+# Make obstacle_detected a mutable container so threads can update it in-place
+# (assigning a bare bool in another module won't update the object imported from this module).
+obstacle_detected = [False]
 context_lock = threading.Lock()
 
 # Detection active flag (mutable container so threads see updates)
