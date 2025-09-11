@@ -4,7 +4,9 @@ from tts import tts_worker, speak
 from camera import camera_thread
 from detection import detection_thread
 from voice_thread import voice_command_thread
-from state import command_queue, detection_active, latest_objects, context_lock, tts_queue, tts_queue_lock, tts_queue_event
+
+from state import command_queue, detection_active, latest_objects, context_lock, tts_queue, tts_queue_lock, tts_queue_event, latest_frame, frame_lock
+from facenet_recognition import recognize_face
 
 
 def main():
@@ -36,6 +38,14 @@ def main():
             with context_lock:
                 objects_str = ", ".join(latest_objects) if latest_objects else "nothing detected"
             speak(f"In front of you: {objects_str}.", priority=2)
+        elif any(phrase in cmd for phrase in ["who is in front of me", "who's in front of me", "who is infront of me", "who's infront of me"]):
+            # Get the latest frame and run face recognition
+            with frame_lock:
+                frame = latest_frame[0]
+            if frame is not None:
+                recognize_face(frame)
+            else:
+                speak("No camera frame available for face recognition.")
 
 
 if __name__ == "__main__":
