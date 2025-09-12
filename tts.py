@@ -1,9 +1,15 @@
 """Text-to-speech queue handling."""
 from gtts import gTTS
+# Prefer playsound3 (more robust, modern backends on Windows) and fall back to playsound
 try:
-    from playsound import playsound  # standard playsound package
-except ImportError:
-    from playsound3 import playsound  # fallback if user had playsound3
+    from playsound3 import playsound
+    _PLAYSOUND_BACKEND = "playsound3"
+except Exception:
+    try:
+        from playsound import playsound  # older playsound package
+        _PLAYSOUND_BACKEND = "playsound"
+    except Exception:
+        raise ImportError("No supported playsound package found. Install 'playsound3' or 'playsound'.")
 import tempfile, os
 import heapq
 from state import tts_queue, tts_queue_lock, tts_queue_event, tts_lock
@@ -11,7 +17,7 @@ from state import tts_queue, tts_queue_lock, tts_queue_event, tts_lock
 
 def tts_worker():
     """Background worker that consumes the priority TTS queue."""
-    print("[TTS] Worker started (gTTS mode).")
+    print(f"[TTS] Worker started (gTTS mode). using {_PLAYSOUND_BACKEND}")
     while True:
         tts_queue_event.wait()
         with tts_queue_lock:

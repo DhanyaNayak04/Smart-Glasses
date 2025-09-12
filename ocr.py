@@ -9,6 +9,9 @@ import cv2
 import numpy as np
 from PIL import Image
 
+__all__ = ["read_text_from_frame"]
+
+
 try:
     import pytesseract
 except Exception:

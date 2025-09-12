@@ -4,8 +4,9 @@ from tts import tts_worker, speak
 from camera import camera_thread
 from detection import detection_thread
 from voice_thread import voice_command_thread
+from ocr import read_text_from_frame
 
-from state import command_queue, detection_active, latest_objects, context_lock, tts_queue, tts_queue_lock, tts_queue_event, latest_frame, frame_lock
+from state import command_queue, detection_active, latest_objects, context_lock, tts_queue, tts_queue_lock, tts_queue_event, latest_frame, frame_lock, latest_boxes
 from facenet_recognition import recognize_face
 
 
@@ -46,6 +47,28 @@ def main():
                 recognize_face(frame)
             else:
                 speak("No camera frame available for face recognition.")
+        elif any(phrase in cmd for phrase in ["read this", "read that", "read the text", "read text", "read"]):
+            # Perform OCR on latest frame and speak the detected text.
+            with frame_lock:
+                frame = latest_frame[0]
+                boxes = list(latest_boxes)  # copy to avoid locking while OCR runs
+            if frame is None:
+                speak("No camera frame available to read from.")
+                continue
+            text = read_text_from_frame(frame, boxes=boxes)
+            if not text:
+                speak("I couldn't detect any readable text.")
+            else:
+                # If text is long, trim and speak a summary first
+                text = text.strip()
+                if len(text) > 300:
+                    # speak first sentence or first 250 chars
+                    first_sentence = text.split('\n')[0][:250]
+                    speak(f"I detected a long text. Starting: {first_sentence} ")
+                    speak("Reading the rest now.")
+                    speak(text)
+                else:
+                    speak(text)
 
 
 if __name__ == "__main__":

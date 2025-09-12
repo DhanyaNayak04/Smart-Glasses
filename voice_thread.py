@@ -16,6 +16,12 @@ ALLOWED_COMMANDS = [
     "who is infront of me", "who's infront of me"
 ]
 
+# We'll treat read commands specially (they aren't in ALLOWED_COMMANDS because
+# they need to be handed to the OCR pipeline). Keep variants here for matching.
+READ_COMMAND_PHRASES = [
+    "read this", "read that", "read the text", "read text", "read"
+]
+
 
 def _normalize_text(s: str) -> str:
     s = s.lower()
@@ -39,6 +45,11 @@ def _match_command(recognized_text: str, cutoff: float = 0.7):
     This version prioritizes an exact match before falling back to fuzzy matching.
     """
     norm = _normalize_text(recognized_text)
+
+    # Check read phrases first (explicit)
+    for phrase in READ_COMMAND_PHRASES:
+        if phrase in norm:
+            return phrase
 
     # 1. (NEW) Prioritize an exact match on the normalized text.
     if norm in _NORMALIZED_TO_COMMAND:
