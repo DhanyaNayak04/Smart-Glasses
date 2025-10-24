@@ -1,9 +1,14 @@
 """Object and obstacle detection thread.
 
 Adjustments:
-- Refined obstacle detection to reduce false positives (was triggering on most objects).
-    Uses central region of the depth map and a ratio of 'near' pixels relative to median depth
-    instead of any single close pixel vs global mean.
+- Refined obstacle detection to reduce false positives:
+  * Tighter central region focus (40% vs 50% of frame)
+  * More conservative depth threshold (50% vs 70% of median)
+  * Higher near-pixel ratio requirement (20% vs 8%)
+  * Larger object size requirement (15% vs 5% of frame)
+  * Only specific obstacle-type objects trigger warnings
+  * Requires BOTH depth AND object detection (AND vs OR logic)
+  * Multi-frame smoothing (2 out of 3 frames must agree)
 """
 import time, cv2, torch, numpy as np
 from models import yolo_model, midas, transform, device
@@ -12,12 +17,19 @@ from state import (
     obstacle_warning_state, detection_active
 )
 from tts import speak
+from detection_config import (
+    CENTRAL_REGION_SIZE, DEPTH_THRESHOLD, NEAR_PIXEL_RATIO, MIN_OBJECT_SIZE,
+    OBSTACLE_TYPES, HISTORY_SIZE, MIN_CONFIRMATIONS, REQUIRE_BOTH_SIGNALS,
+    MAX_WARNING_COUNT, DETECTION_FRAME_SKIP
+)
 
 
 def detection_thread():
     global latest_objects, obstacle_detected
     frame_count = 0
-    print("[DETECTION] Thread started.")
+    # Obstacle detection smoothing: require multiple consecutive frames
+    obstacle_history = []  # Store last N detections
+    print(f"[DETECTION] Thread started. Config: depth_thresh={DEPTH_THRESHOLD}, near_ratio={NEAR_PIXEL_RATIO}, min_size={MIN_OBJECT_SIZE}")
     while True:
         if not detection_active[0]:
             time.sleep(0.1)
@@ -58,7 +70,7 @@ def detection_thread():
                 latest_boxes.clear()
                 latest_boxes.extend(boxes_list)
             print(f"[DETECTION] Objects: {detected} boxes={len(boxes_list)}")
-        if frame_count % 3 == 0:
+        if frame_count % DETECTION_FRAME_SKIP == 0:
             # Depth estimation
             img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             input_batch = transform(img_rgb).to(device)
@@ -74,7 +86,7 @@ def detection_thread():
 
             # Focus on central region (reduces edges / background influence)
             h, w = depth_map.shape
-            ch, cw = int(h * 0.5), int(w * 0.5)
+            ch, cw = int(h * CENTRAL_REGION_SIZE), int(w * CENTRAL_REGION_SIZE)
             y0, x0 = (h - ch) // 2, (w - cw) // 2
             roi = depth_map[y0:y0 + ch, x0:x0 + cw]
 
@@ -83,13 +95,15 @@ def detection_thread():
             if median_depth <= 0:
                 near_ratio = 0.0
             else:
-                near_mask = roi < (median_depth * 0.7)  # 30% closer than median
+                # Objects closer than (median * DEPTH_THRESHOLD)
+                near_mask = roi < (median_depth * DEPTH_THRESHOLD)
                 near_ratio = near_mask.mean()
 
-            # Decide obstacle if enough of central region is close
-            obstacle_now = near_ratio > 0.08  # 8% of pixels close
+            # Check if enough pixels are close
+            depth_obstacle = near_ratio > NEAR_PIXEL_RATIO
 
             # Also consider large bounding boxes in central region as obstacle
+            # But only for specific obstacle-type objects
             large_central_box = False
             try:
                 cx_min, cy_min = x0, y0
@@ -99,25 +113,39 @@ def detection_thread():
                     # box centroid
                     cx = (x1 + x2) / 2.0
                     cy = (y1 + y2) / 2.0
-                    # relative area threshold for "large" object
-                    if b.get('rel_area', 0.0) >= 0.05 and (cx_min <= cx <= cx_max) and (cy_min <= cy <= cy_max):
+                    # Check if object is in obstacle types and large enough
+                    is_obstacle_type = b.get('label', '') in OBSTACLE_TYPES
+                    if is_obstacle_type and b.get('rel_area', 0.0) >= MIN_OBJECT_SIZE and (cx_min <= cx <= cx_max) and (cy_min <= cy <= cy_max):
                         large_central_box = True
+                        print(f"[DETECTION] Large obstacle detected: {b.get('label')} (area={b.get('rel_area', 0.0):.2%})")
                         break
-            except Exception:
+            except Exception as e:
+                print(f"[DETECTION] Error checking boxes: {e}")
                 large_central_box = False
 
-            # combine signals: require either a sizeable central object OR a near_ratio
-            obstacle_now = obstacle_now or large_central_box
+            # Combine signals based on configuration
+            if REQUIRE_BOTH_SIGNALS:
+                obstacle_now = depth_obstacle and large_central_box
+            else:
+                obstacle_now = depth_obstacle or large_central_box
+            
+            # Smoothing: add to history and check consensus
+            obstacle_history.append(obstacle_now)
+            if len(obstacle_history) > HISTORY_SIZE:
+                obstacle_history.pop(0)
+            
+            # Require minimum confirmations from recent frames
+            obstacle_confirmed = sum(obstacle_history) >= MIN_CONFIRMATIONS
 
             with context_lock:
-                obstacle_detected[0] = bool(obstacle_now)
+                obstacle_detected[0] = bool(obstacle_confirmed)
 
-            if obstacle_now:
+            if obstacle_confirmed:
                 if not obstacle_warning_state['active']:
                     obstacle_warning_state['active'] = True
                     obstacle_warning_state['count'] = 0
-                if obstacle_warning_state['count'] < 2:
-                    print(f"[DETECTION] ⚠️ Obstacle ahead (near_ratio={near_ratio:.2f})")
+                if obstacle_warning_state['count'] < MAX_WARNING_COUNT:
+                    print(f"[DETECTION] ⚠️ Obstacle ahead (depth_ratio={near_ratio:.2f}, confirmed={sum(obstacle_history)}/{len(obstacle_history)})")
                     speak("Warning! Obstacle detected ahead.", priority=1)
                     obstacle_warning_state['count'] += 1
             else:

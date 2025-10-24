@@ -13,3 +13,8 @@ requests
 pytesseract
 Pillow
 easyocr
+kagglehub
+tensorflow
+pandas
+matplotlib
+scikit-learn

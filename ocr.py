@@ -1,6 +1,7 @@
 """Clean OCR implementation used by ocr.py shim.
 
 Keep this module self-contained so it can be edited safely.
+Now supports CNN-based character recognition for improved accuracy.
 """
 from typing import List, Optional
 import os
@@ -16,6 +17,14 @@ try:
     import pytesseract
 except Exception:
     pytesseract = None
+
+
+# Import CNN OCR module if available
+try:
+    from ocr_cnn import get_cnn_recognizer, read_text_with_cnn
+    _cnn_available = True
+except Exception:
+    _cnn_available = False
 
 
 def _ensure_tesseract_on_windows() -> None:
@@ -155,11 +164,20 @@ def _postprocess_text_and_maybe_rerun(best: str, frame: np.ndarray) -> str:
     return cleaned
 
 
-def read_text_from_frame(frame: np.ndarray, boxes: Optional[List[dict]] = None, debug_dir: Optional[str] = None) -> str:
+def read_text_from_frame(frame: np.ndarray, boxes: Optional[List[dict]] = None, debug_dir: Optional[str] = None, use_cnn: bool = True) -> str:
     """Extract readable text from a frame.
 
-    Order: provided boxes -> center crop -> full frame -> EasyOCR fallback.
+    Order: CNN model (if available and enabled) -> provided boxes -> center crop -> full frame -> EasyOCR fallback.
     When debug_dir is set, crops are saved for inspection.
+    
+    Args:
+        frame: Input frame to extract text from
+        boxes: Optional bounding boxes for text regions
+        debug_dir: Optional directory to save debug images
+        use_cnn: Whether to use the trained CNN model (default: True)
+    
+    Returns:
+        Extracted text string
     """
     _ensure_tesseract_on_windows()
 
@@ -173,6 +191,18 @@ def read_text_from_frame(frame: np.ndarray, boxes: Optional[List[dict]] = None, 
             pass
 
     candidates: List[str] = []
+    
+    # 0) Try CNN-based recognition first (if enabled and available)
+    if use_cnn and _cnn_available:
+        try:
+            cnn_result = read_text_with_cnn(frame, boxes, confidence_threshold=0.6)
+            if cnn_result and len(cnn_result.strip()) > 0:
+                candidates.append(cnn_result.strip())
+                # If CNN gives good result, we can trust it more
+                if len(cnn_result.strip()) >= 3:  # At least 3 characters
+                    return _postprocess_text_and_maybe_rerun(cnn_result.strip(), frame)
+        except Exception as e:
+            print(f"CNN OCR error (falling back to traditional methods): {e}")
 
     # 1) try provided boxes
     if boxes:
